@@ -16,7 +16,7 @@ Two things this gets right that hand-planning does not:
 
 Output: JSON consumed by build_audio.py and build_video.py.
 """
-import argparse, json, math, os, re, sys
+import argparse, json, os, re, sys
 import numpy as np
 
 

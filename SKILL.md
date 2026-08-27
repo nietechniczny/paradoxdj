@@ -15,8 +15,9 @@ Builds a continuous DJ set of a requested length, with generated music and gener
 |---|---|---|
 | Music | Suno (browser) | Udio, Riffusion, an existing library |
 | Visuals | higgsfield-mcp | magnific-mcp, any image/video generator, stock loops |
-| Assembly | ffmpeg + Python (numpy, scipy) | — |
-| Beat analysis (optional) | librosa | aubio, madmom |
+| Assembly | ffmpeg on PATH + Python 3 with numpy | — |
+| Title card | Pillow | — |
+| Beat analysis (optional) | librosa | skip with `--no-grid` |
 
 Without a music source **and** a visual source you cannot finish. Say so up front rather than delivering half a set.
 
