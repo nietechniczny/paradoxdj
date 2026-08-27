@@ -1,0 +1,12 @@
+# working artefacts
+work/
+out/
+loops/
+*.wav
+*.mp4
+*.mp3
+*.png
+.pdj_*filter.txt
+__pycache__/
+*.pyc
+.DS_Store
