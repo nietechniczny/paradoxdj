@@ -61,6 +61,13 @@ class Curve:
         seg = seg[seg > -60]
         return float(seg.min()) if seg.size else -99.0
 
+    def low_pct(self, a, b, pct=10):
+        """Percentile of the quiet end -- catches a breakdown mid-fragment."""
+        i, j = int(a / self.step), int(b / self.step)
+        seg = self.v[max(0, i):max(1, j)]
+        seg = seg[seg > -60]
+        return float(np.percentile(seg, pct)) if seg.size else -99.0
+
 
 def pick_in_point(curve, duration, seg, edge=10.0, guard=2.0, step=0.5,
                   max_frac=0.6):
@@ -70,10 +77,11 @@ def pick_in_point(curve, duration, seg, edge=10.0, guard=2.0, step=0.5,
     best, best_score = lo, -1e9
     s = lo
     while s <= hi:
-        score = (0.40 * curve.mean(s, s + edge)
-                 + 0.20 * curve.mean(s, s + seg)
-                 + 0.30 * curve.mean(s + seg - edge, s + seg)
-                 + 0.10 * curve.min(s + seg - edge, s + seg))
+        score = (0.35 * curve.mean(s, s + edge)          # enters with punch
+                 + 0.15 * curve.mean(s, s + seg)          # overall level
+                 + 0.25 * curve.mean(s + seg - edge, s + seg)   # exits with punch
+                 + 0.10 * curve.min(s + seg - edge, s + seg)    # no hole at the hand-off
+                 + 0.15 * curve.low_pct(s, s + seg))      # no deep breakdown inside
         if score > best_score:
             best, best_score = s, score
         s += step

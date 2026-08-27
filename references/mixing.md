@@ -58,6 +58,23 @@ clash.
 Crossfade curves are equal-power (`qsin`). Equal-gain (`tri`) is correct only
 for phase-aligned material; on independent tracks it dips in the middle.
 
+## Two kinds of hole
+
+They need different treatment and it is worth keeping them apart.
+
+**At a transition** — the incoming track has nothing to fill the gap the bass
+swap opened. That is a defect. `verify_mix.py` fails the build on it.
+
+**Inside a segment** — the chosen fragment contains a breakdown. Often that is
+exactly right; tension before a drop is what the music is for. `verify_mix.py`
+lists these without failing, so you can look and decide. `plan_set.py` weights
+the segment's 10th-percentile loudness at 0.15, which biases in-point choice
+away from fragments with a deep hole in them but does not forbid them.
+
+Do not collapse these into one number. Measured on a six-track test, a mix that
+reported zero bad transitions still had a passage at −16 LUFS in the middle of
+a segment; a transitions-only check said nothing about it.
+
 ## Loudness
 
 Measure each segment separately (EBU R128) and gain it to a common target

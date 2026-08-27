@@ -65,6 +65,12 @@ Details: `references/music-generation.md`, `references/visuals.md`, `references/
 
 **Run `verify_mix.py` before rendering video.** Video is the expensive step. A mix with holes at the transitions will still have them after an hour of encoding.
 
+**Read the whole QC output, not just PASS/FAIL.** The pass verdict covers
+*transitions*. Deep passages inside a segment are listed separately and do not
+fail the build, because a breakdown is usually the composer's intent. Look at
+them anyway — a 16 LUFS floor in the middle of a set is sometimes a breakdown
+and sometimes a fragment that should never have been chosen.
+
 **Never fake beatmatching.** `analyze_tracks.py` classes every track: **A** metronomic, **B** warpable, **C** no stable grid. Generative tracks are frequently C — no DJ software can lock to those either. Either exclude them (`--exclude-class C`), regenerate them, or say plainly that the set is crossfaded rather than beatmatched.
 
 **Never solve a CAPTCHA or bot check.** Suno throws Cloudflare challenges during long runs. Stop, tell the user, wait. The page reload also clears the form, so re-check every field before continuing.
@@ -82,3 +88,4 @@ Details: `references/music-generation.md`, `references/visuals.md`, `references/
 | Limiting to −1 dBFS sample peak | True peak still clips (inter-sample) | Limit, then trim; verify true peak ≤ −1.0 dBFS |
 | Looping a clip with `-stream_loop` alone | Visible jump every repeat | `make_loops.py` crossfades the clip's tail into its head |
 | Clicking browser UI by coordinates | Layout shifts, clicks land on the wrong control | Use element references; re-read the page after any reload |
+| Measuring only at transitions | A hole in the middle of a segment passes QC silently | `verify_mix.py` also scans segment interiors and reports them |

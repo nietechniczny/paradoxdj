@@ -86,6 +86,33 @@ def main():
     if bad:
         fails.append(f"{bad} transition(s) drop more than {a.max_dip} LU")
 
+    # Mid-segment scan. Transition checks above say nothing about what happens
+    # BETWEEN transitions, so a deep breakdown inside a chosen fragment passes
+    # unnoticed. Report those separately: they are often intentional, but a
+    # PASS must not hide a 16 LU hole.
+    print()
+    mids = []
+    for i, p in enumerate(plan):
+        a0, b0 = p["cue"] + X + 2, p["cue"] + p["seg"] - X - 2
+        if b0 - a0 < 15:
+            continue
+        seg = v[(t >= a0) & (t <= b0)]
+        seg = seg[seg > -60]
+        if not seg.size:
+            continue
+        dip = seg.min() - np.median(seg)
+        if dip < -a.max_dip:
+            where = float(t[(t >= a0) & (t <= b0)][int(np.argmin(seg))])
+            mids.append((where, p["title"], dip, seg.min()))
+    if mids:
+        print(f"deep passages inside segments (>{a.max_dip} LU below that segment's median):")
+        for where, title, dip, lo in mids:
+            print(f"{fmt(where):>7}  {title[:34]:<34} {dip:+5.1f} LU  (floor {lo:.1f} LUFS)")
+        print("  These are usually breakdowns and usually fine. If one is not, pick a "
+              "different in-point for that track.")
+    else:
+        print("no deep passages inside segments")
+
     quiet = t[(v < -40) & (t > 10) & (t < t[-1] - 20)]
     if quiet.size:
         groups, cur = [], [quiet[0]]
@@ -107,8 +134,9 @@ def main():
         for f in fails:
             print(f"FAIL: {f}")
         sys.exit(1)
-    print(f"PASS - {len(plan)} segments, {len(plan)-1} transitions, "
-          f"{bad} over the {a.max_dip} LU dip limit")
+    print(f"PASS (transitions) - {len(plan)} segments, {len(plan)-1} transitions, "
+          f"{bad} over the {a.max_dip} LU dip limit"
+          + (f"; {len(mids)} deep passage(s) inside segments, listed above" if mids else ""))
 
 
 if __name__ == "__main__":
