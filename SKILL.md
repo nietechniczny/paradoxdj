@@ -50,6 +50,7 @@ pass state to each other through `tracks.json` and `plan.json`.
 |---|---|---|
 | 1 | `analyze_tracks.py --in AUDIO --out tracks.json` | duration, loudness, loudness curve, beat-grid class |
 | 2 | `plan_set.py --tracks tracks.json --target 60:00 --clips CLIPS --out plan.json` | segments, in-points, gains, clip assignment |
+| 2b | add `--target-bpm auto` | tempo lock: one BPM for the set, segments in whole bars, in-points on downbeats |
 | 3 | `build_audio.py --plan plan.json --out mix.wav` | the mix |
 | 4 | `verify_mix.py --mix mix.wav --plan plan.json` | pass/fail QC — **run before rendering video** |
 | 5 | `make_loops.py --in CLIPS --out loops` | seamless, correctly framed loops |
@@ -71,7 +72,13 @@ fail the build, because a breakdown is usually the composer's intent. Look at
 them anyway — a 16 LUFS floor in the middle of a set is sometimes a breakdown
 and sometimes a fragment that should never have been chosen.
 
-**Never fake beatmatching.** `analyze_tracks.py` classes every track: **A** metronomic, **B** warpable, **C** no stable grid. Generative tracks are frequently C — no DJ software can lock to those either. Either exclude them (`--exclude-class C`), regenerate them, or say plainly that the set is crossfaded rather than beatmatched.
+**Beatmatch when the material allows it, and never fake it when it does not.**
+`analyze_tracks.py` classes every track: **A** metronomic, **B** warpable, **C**
+no stable grid. With mostly A and B, pass `--target-bpm auto` — every track is
+stretched to one tempo with rubberband, segments become whole bars and in-points
+land on downbeats. Tracks needing more than `--max-stretch` percent are dropped
+rather than audibly mangled. With class C material there is no grid to lock to,
+no DJ software can invent one either, and the honest word is *crossfaded*.
 
 **Never solve a CAPTCHA or bot check.** Suno throws Cloudflare challenges during long runs. Stop, tell the user, wait. The page reload also clears the form, so re-check every field before continuing.
 
@@ -82,7 +89,8 @@ and sometimes a fragment that should never have been chosen.
 | Mistake | What happens | Fix |
 |---|---|---|
 | Fixed in-point (e.g. always 20 s) | Tracks enter on a quiet verse; the bass swap leaves an audible hole | `plan_set.py` scores in-points by energy at entry, body and exit |
-| Plain crossfade | Two kicks and two basslines stack up, low end turns to mud | Bass-swap: high-pass the outgoing track through the fade |
+| Plain crossfade | Two kicks and two basslines stack up, low end turns to mud | Bass swap: the low band is handed over, weighted per bar by both tracks' bass power |
+| Scoring a 10 s entry window against a 16 s crossfade | Half the blend is never examined; holes appear in the part nobody looked at | `plan_set.py` matches the scoring window to the crossfade length |
 | Trusting the generator's BPM | Running order is built on numbers the files do not have | Sort by measured BPM from `analyze_tracks.py` |
 | Trusting the generator's duration | Set lands minutes off target | Measure with ffprobe; `plan_set.py` solves lengths from real durations |
 | Limiting to −1 dBFS sample peak | True peak still clips (inter-sample) | Limit, then trim; verify true peak ≤ −1.0 dBFS |

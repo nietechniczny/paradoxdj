@@ -71,17 +71,22 @@ class Curve:
 
 def pick_in_point(curve, duration, seg, edge=10.0, guard=2.0, step=0.5,
                   max_frac=0.6):
-    """Best start offset: punchy entry, solid body, punchy exit."""
+    """Best start offset: punchy entry, solid body, punchy exit.
+
+    `edge` must match the crossfade length. Scoring a 10 s entry window when the
+    transition actually runs 16 s judges the wrong audio: the second half of the
+    blend is the part that was never looked at, and that is where holes appear.
+    """
     lo = min(8.0, max(0.0, duration - seg - guard))
     hi = max(lo, min(max_frac * duration, duration - seg - guard))
     best, best_score = lo, -1e9
     s = lo
     while s <= hi:
-        score = (0.35 * curve.mean(s, s + edge)          # enters with punch
-                 + 0.15 * curve.mean(s, s + seg)          # overall level
+        score = (0.30 * curve.mean(s, s + edge)          # enters with punch
+                 + 0.10 * curve.mean(s, s + seg)          # overall level
                  + 0.25 * curve.mean(s + seg - edge, s + seg)   # exits with punch
                  + 0.10 * curve.min(s + seg - edge, s + seg)    # no hole at the hand-off
-                 + 0.15 * curve.low_pct(s, s + seg))      # no deep breakdown inside
+                 + 0.25 * curve.low_pct(s, s + seg))      # no deep breakdown inside
         if score > best_score:
             best, best_score = s, score
         s += step
@@ -133,6 +138,15 @@ def main():
     ap.add_argument("--clips", help="folder of looping video clips to assign")
     ap.add_argument("--target-lufs", type=float, default=-11.0,
                     help="per-segment loudness target before the master limiter")
+    ap.add_argument("--target-bpm", default=None,
+                    help="'auto' (median of the tracks) or a number. Enables tempo "
+                         "lock and bar quantisation: every track is time-stretched to "
+                         "this tempo and segments become whole bars.")
+    ap.add_argument("--crossfade-bars", type=int, default=8,
+                    help="transition length in bars when --target-bpm is set")
+    ap.add_argument("--max-stretch", type=float, default=6.0,
+                    help="percent; tracks needing more than this are dropped from a "
+                         "tempo-locked set rather than audibly mangled")
     a = ap.parse_args()
 
     data = json.load(open(a.tracks))
@@ -158,6 +172,36 @@ def main():
     target = parse_time(a.target)
     X = a.xfade
 
+    # --- tempo lock -------------------------------------------------------
+    # Beatmatching means every track playing at ONE tempo. Stretch each to the
+    # target with rubberband (build_audio does the work; here we only decide
+    # the ratios) and refuse tracks that would need an audible amount of it.
+    target_bpm = None
+    bar = None
+    if a.target_bpm:
+        bpms = [(t.get("grid") or {}).get("bpm") for t in tracks]
+        if any(b is None for b in bpms):
+            sys.exit("--target-bpm needs beat-grid data; re-run analyze_tracks without --no-grid")
+        target_bpm = (float(np.median(bpms)) if a.target_bpm == "auto"
+                      else float(a.target_bpm))
+        keep = []
+        for t, b in zip(tracks, bpms):
+            pct = abs(target_bpm / b - 1.0) * 100
+            if pct > a.max_stretch:
+                print(f"dropping {t['file']}: {b:.2f} BPM needs {pct:.1f}% stretch "
+                      f"(limit {a.max_stretch}%)")
+            else:
+                keep.append(t)
+        tracks = keep
+        n = len(tracks)
+        if n < 2:
+            sys.exit("too few tracks survive the stretch limit; raise --max-stretch "
+                     "or pick a target closer to the material")
+        bar = 4 * 60.0 / target_bpm
+        X = a.crossfade_bars * bar
+        print(f"tempo lock: {target_bpm:.2f} BPM, bar {bar:.3f}s, "
+              f"crossfade {a.crossfade_bars} bars ({X:.2f}s), {n} tracks")
+
     # sum(segments) = target + (n-1)*X, distributed by phase weight
     phases = assign_phases(n, DEFAULT_SHAPE)
     rel = np.array([p[1] for p in phases], dtype=float)
@@ -180,6 +224,31 @@ def main():
             segs += deficit / n
     segs = np.maximum(segs, X + 20.0)
 
+    if target_bpm:
+        # Round each segment to whole bars, then fix the rounding remainder on
+        # the segments with the most room, so the total stays on target.
+        ratios = np.array([target_bpm / (t["grid"]["bpm"]) for t in tracks])
+        cap_bars = np.floor((caps / ratios) / bar).astype(int)
+        want = int(round((target + (n - 1) * X) / bar))
+        bars = np.maximum(4, np.round(segs / bar).astype(int))
+        bars = np.minimum(bars, cap_bars)
+        for _ in range(2000):
+            diff = want - int(bars.sum())
+            if diff == 0:
+                break
+            if diff > 0:
+                room = cap_bars - bars
+                if room.max() <= 0:
+                    print(f"note: {diff} bars short of target; material is too short")
+                    break
+                bars[int(np.argmax(room))] += 1
+            else:
+                idx = int(np.argmax(bars))
+                if bars[idx] <= 4:
+                    break
+                bars[idx] -= 1
+        segs = bars * bar
+
     clips = []
     if a.clips:
         clips = sorted(f for f in os.listdir(a.clips)
@@ -191,13 +260,29 @@ def main():
     for i, (t, (label, _), seg) in enumerate(zip(tracks, phases, segs)):
         seg = float(round(seg, 2))
         curve = Curve(t.get("curve"), t.get("curve_step", 0.5))
-        start = pick_in_point(curve, t["duration"], seg)
+        g = t.get("grid") or {}
+        ratio = target_bpm / g["bpm"] if target_bpm else 1.0
+        src_len = seg * ratio                      # seconds taken from the source
+        # score the same span the crossfade will actually use
+        edge = max(8.0, min(X * ratio, src_len / 3))
+        start = pick_in_point(curve, t["duration"], src_len, edge=edge)
+        if target_bpm:
+            # snap to a downbeat so bars line up once the tempo matches
+            src_bar = g["bar_seconds"]
+            k = round((start - g["downbeat"]) / src_bar)
+            snapped = g["downbeat"] + k * src_bar
+            if snapped < 0:
+                snapped += src_bar
+            if snapped + src_len <= t["duration"] - 0.5:
+                start = round(snapped, 4)
         gain = round(a.target_lufs - t["lufs"], 2) if t.get("lufs") else 0.0
         item = dict(index=i + 1, file=t["file"], path=t["path"],
                     title=clean_title(t["file"]),
-                    phase=label, start=start, seg=seg, cue=round(cue, 2),
+                    phase=label, start=start, seg=round(seg, 4), cue=round(cue, 4),
                     gain_db=gain, grid_class=t.get("grid_class"),
-                    bpm=(t.get("grid") or {}).get("bpm"))
+                    bpm=(t.get("grid") or {}).get("bpm"),
+                    stretch=round(ratio, 6), src_seconds=round(src_len, 4),
+                    bars=int(round(seg / bar)) if target_bpm else None)
         if clips:
             # avoid repeating a clip back-to-back
             item["clip"] = clips[i % len(clips)] if len(clips) > 1 else clips[0]
@@ -206,16 +291,24 @@ def main():
         cue += seg - X
 
     total = cue + X
-    out = dict(target=target, xfade=X, total=round(total, 2),
+    out = dict(target=target, xfade=round(X, 4), total=round(total, 2),
+               target_bpm=target_bpm, bar_seconds=bar,
+               crossfade_bars=(a.crossfade_bars if target_bpm else None),
                target_lufs=a.target_lufs, clips_dir=os.path.abspath(a.clips) if a.clips else None,
                plan=plan)
     json.dump(out, open(a.out, "w"), indent=1)
 
-    print(f"\n{'cue':>7} {'#':>3}  {'track':<34} {'phase':<9} {'seg':>6} {'in':>7} {'gain':>6} {'bpm':>7}")
+    hdr = f"\n{'cue':>7} {'#':>3}  {'track':<30} {'phase':<9} {'seg':>6} {'in':>7} {'gain':>6} {'bpm':>7}"
+    if target_bpm:
+        hdr += f" {'bars':>5} {'stretch':>8}"
+    print(hdr)
     for p in plan:
-        print(f"{fmt(p['cue']):>7} {p['index']:>3}  {p['title'][:34]:<34} {p['phase']:<9} "
-              f"{fmt(p['seg']):>6} {fmt(p['start']):>7} {p['gain_db']:>+6.1f} "
-              f"{(p['bpm'] or 0):>7.2f}")
+        line = (f"{fmt(p['cue']):>7} {p['index']:>3}  {p['title'][:30]:<30} {p['phase']:<9} "
+                f"{fmt(p['seg']):>6} {fmt(p['start']):>7} {p['gain_db']:>+6.1f} "
+                f"{(p['bpm'] or 0):>7.2f}")
+        if target_bpm:
+            line += f" {p['bars']:>5} {(p['stretch'] - 1) * 100:>+7.2f}%"
+        print(line)
     print(f"\ntarget {fmt(target)} -> planned {fmt(total)} "
           f"({n} segments, {a.xfade:g}s crossfades)  wrote {a.out}")
 

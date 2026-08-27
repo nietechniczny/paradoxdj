@@ -42,18 +42,56 @@ Adding the exit terms took that same set from 15 bad transitions to 1, with 26
 of 27 inside ±2 LU. In-points land on drops, which is where a DJ would drop the
 needle anyway.
 
+## Tempo lock
+
+Beatmatching means one tempo for the whole set. `--target-bpm auto` takes the
+median of the measured tempos; `build_audio.py` stretches every segment to it
+with `rubberband` before mixing. Anything needing more than `--max-stretch`
+percent (default 6) is dropped from the set rather than mangled — beyond about
+6% the artefacts on transients are audible.
+
+With the tempo locked, everything else can be counted in bars instead of
+seconds: segment lengths are whole bars, the crossfade is a whole number of bars
+(default 8), and in-points snap to the track's downbeat. The set then lands a
+bar or two off the requested runtime rather than exactly on it — that is the
+price of musical boundaries, and it is worth paying.
+
+Finding the downbeat needs care. In four-to-the-floor the kick is on every beat,
+so a beat tracker's phase is not the one a listener feels — it latches onto
+whatever is most periodic, frequently the hi-hat or the offbeat.
+`analyze_tracks.py` locks the grid to the 38–95 Hz kick envelope, then picks
+which of the four beats starts the bar from full-band novelty, because bar
+starts carry crashes and chord changes that the other three beats do not.
+
+Measured on a six-track test: tempo spread across the finished mix fell from
+5.20 BPM to 0.50 BPM.
+
 ## The bass swap
 
 A plain crossfade puts two kicks and two basslines on top of each other. The low
 end doubles, the result is muddy, and any tempo difference is most audible down
 there.
 
-`build_audio.py` high-passes the outgoing track for the length of the
-transition — two poles at 180 Hz, with +4 dB makeup for the energy lost — while
-the incoming track arrives full-range. Only one low end plays at a time. This
-is standard DJ technique and it also hides the fact that the tracks are not
-beatmatched, because the clash you hear when kicks fight is a *low-frequency*
-clash.
+`build_audio.py` splits both tracks at 180 Hz with a linear-phase FFT crossover
+that recombines exactly, then treats the two bands differently. The high band
+crossfades equal-power. The low band is *handed over*: a weight computed per bar
+from the bass power of both tracks decides which one carries it.
+
+```
+w = base·pB / (base·pB + (1 − base)·pA)
+```
+
+`base` is the plain time ramp; `pA` and `pB` are the two tracks' bass RMS in
+that bar. When the outgoing track drops its bass mid-transition — breakdowns
+happen, and an 8-bar crossfade is long enough to land in one — the incoming
+track takes the low end early instead of leaving a hole. A static high-pass
+cannot do that; it removes the bass on a schedule regardless of whether there
+is any to remove.
+
+The blend is then normalised by `power_norm` at p = 1.5, between equal-gain
+(right for two kicks locked to the same grid) and equal-power (right for
+uncorrelated sources). Without it the mix lost about 1 dB overall, because a
+long crossfade means a large share of the set is a two-source blend.
 
 Crossfade curves are equal-power (`qsin`). Equal-gain (`tri`) is correct only
 for phase-aligned material; on independent tracks it dips in the middle.

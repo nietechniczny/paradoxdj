@@ -76,7 +76,7 @@ python3 scripts/publish_assets.py --plan plan.json --mix mix.wav --video video.m
     --outdir out --name "NORTHBOUND - Matt Paradox" --artist "Matt Paradox"
 ```
 
-Useful flags: `--exclude-class C` (drop tracks with no stable beat grid), `--no-grid` (skip the slow analysis), `--dry-run` on both build steps (print the ffmpeg command and stop), `--order` (supply your own running order, one filename per line).
+Useful flags: `--target-bpm auto` (tempo lock and bar quantisation), `--exclude-class C` (drop tracks with no stable beat grid), `--no-grid` (skip the slow analysis), `--dry-run` on both build steps (print the ffmpeg command and stop), `--order` (supply your own running order, one filename per line).
 
 ---
 
@@ -113,9 +113,13 @@ Requested durations are worth nothing here. Suno takes `Duration: Custom` as a h
 
 A plain crossfade between two dance tracks puts two kicks and two basslines on top of each other for the length of the fade. The low end doubles, the result is mud, and any tempo difference is most audible down there.
 
-`build_audio.py` does what a DJ does: the outgoing track is high-passed for the duration of the transition (two-pole at 180 Hz, applied twice, with +4 dB makeup for the energy it loses) while the incoming track arrives at full bandwidth. Only one low end is ever playing. Curves are equal-power (`qsin`) — equal-gain dips in the middle on material that is not phase-aligned.
+`build_audio.py` does what a DJ does, and does it adaptively. Both tracks are split at 180 Hz with a linear-phase FFT crossover; the high band crossfades equal-power, and the low band is handed over by a weight computed **per bar from the bass power of both tracks** — `w = base·pB / (base·pB + (1−base)·pA)`. Only one low end is ever playing, and when the outgoing track drops its bass mid-transition the incoming track takes over early instead of leaving a hole. A static high-pass cannot do that; it strips the bass on a schedule whether or not there is any there.
 
-This also hides the fact that the tracks are not beatmatched, because the clash you hear when two kicks fight is a low-frequency clash.
+### Tempo lock
+
+Pass `--target-bpm auto` and every track is time-stretched to one tempo with `rubberband` before mixing. That is what beatmatching actually is. With the tempo locked, segments become whole bars, the crossfade is a whole number of bars, and in-points snap to downbeats — found by locking the grid to the 38–95 Hz kick envelope rather than to whatever a beat tracker latched onto.
+
+Tracks needing more than `--max-stretch` percent (default 6) are dropped rather than mangled. On a six-track test the tempo spread across the finished mix fell from 5.20 BPM to 0.50 BPM.
 
 ### In-points chosen by energy
 
@@ -143,7 +147,7 @@ Same set, same tracks, scored in-points: **one hole left, and 26 of 27 transitio
 | Class | Meaning | What happens |
 |---|---|---|
 | A | residual < 25 ms, drift < 0.4% — metronomic | beatmatchable |
-| B | drift < 1% | fine for crossfades, warpable with `rubberband` |
+| B | drift < 1% | fine for crossfades, and stretched to the set tempo under `--target-bpm` |
 | C | drift ≥ 1%, no stable grid | regenerate, exclude, or accept a crossfaded set |
 
 Generative tracks are frequently class C. This is a property of the audio, not of the analysis: Rekordbox, Traktor and Serato all build a constant grid and fail on those files for the same reason. When a set contains class C tracks, the honest description is **crossfaded, not beatmatched** — and the skill is written to say that out loud rather than let it pass. With the bass swap, a crossfaded set is what most listeners hear as clean anyway; that is not an excuse to relabel it.

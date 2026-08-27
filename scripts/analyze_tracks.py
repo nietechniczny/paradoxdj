@@ -14,6 +14,9 @@ Output: JSON consumed by plan_set.py.
 import argparse, json, os, re, subprocess, sys
 import numpy as np
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pdj_dsp
+
 SR = 22050
 HOP = 512
 
@@ -147,8 +150,20 @@ def grid_fit(path, seed_bpm):
     m2[:h] = False
     drift = (abs(half(m1) - half(m2)) / fit_bpm * 100
              if m1.sum() > 10 and m2.sum() > 10 else float("nan"))
+    # Lock the grid to the kick, then find which beat starts the bar. A beat
+    # tracker locks onto whatever is most periodic -- frequently the hi-hat or
+    # the offbeat -- so its phase is not the one a listener feels.
+    mono = pdj_dsp.decode(path, sr=pdj_dsp.SR, mono=True)
+    kenv, kfps = pdj_dsp.kick_envelope(mono, pdj_dsp.SR)
+    kick_phase, kick_score = pdj_dsp.grid_phase(kenv, kfps, fit_bpm)
+    db, db_score = pdj_dsp.downbeat_offset(mono, pdj_dsp.SR, fit_bpm, kick_phase)
+    beat = 60.0 / fit_bpm
     return dict(bpm=float(fit_bpm), anchor=float(sol[0]), period=float(sol[1]),
-                rms_ms=rms_ms, drift_pct=float(drift), pulse_contrast=float(strength))
+                rms_ms=rms_ms, drift_pct=float(drift), pulse_contrast=float(strength),
+                kick_phase=float(kick_phase), kick_contrast=float(kick_score),
+                downbeat_beat=int(db),
+                downbeat=float(kick_phase + db * beat),
+                bar_seconds=float(beat * 4))
 
 
 def classify(g):
@@ -190,8 +205,9 @@ def main():
                    lufs=lufs, true_peak=peak, curve_step=0.5, curve=[round(v, 2) for v in curve],
                    grid=g, grid_class=classify(g))
         tracks.append(rec)
-        gs = ("grid %.2f BPM rms %.0fms drift %.2f%% [%s]"
-              % (g["bpm"], g["rms_ms"], g["drift_pct"], rec["grid_class"])) if g else "grid: skipped"
+        gs = ("grid %.2f BPM rms %.0fms drift %.2f%% [%s] kick@%.3fs bar %.3fs"
+              % (g["bpm"], g["rms_ms"], g["drift_pct"], rec["grid_class"],
+                 g["downbeat"], g["bar_seconds"])) if g else "grid: skipped"
         print(f"{f:<40} {dur/60:5.2f} min  {lufs:6.1f} LUFS  {gs}")
 
     with open(a.out, "w") as fh:
